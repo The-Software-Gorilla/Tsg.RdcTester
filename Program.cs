@@ -8,6 +8,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
+using Tsg.Models;
+using Tsg.Models.Ensenta;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -356,5 +358,17 @@ public static class UrlHelper
     {
         if (string.IsNullOrWhiteSpace(endpoint)) return baseUrl;
         return baseUrl.TrimEnd('/') + "/" + endpoint.TrimStart('/');
+    }
+}
+
+public class CallPayload
+{
+    public EnsentaSoapEnvelope Envelope { get;} = new EnsentaSoapEnvelope();
+    public static CallPayload GenerateCallPayload()
+    {
+        return new CallPayload
+        {
+            
+        };
     }
 }
