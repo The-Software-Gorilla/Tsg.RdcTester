@@ -9,6 +9,7 @@ namespace Tsg.RdcTester.Controllers;
 public class TestRunner : ControllerBase
 {
     private const string AzureJobStorage = "AzureWebJobsStorage";
+    private const string AcceptedStatus = "accepted";
     private readonly ILogger<TestRunner> _logger;
     private readonly string _storageConnection;
     private readonly IConfiguration _configuration;
@@ -41,7 +42,7 @@ public class TestRunner : ControllerBase
         var entity = new TableEntity("testRun", reqId.ToString())
         {
             { "StartedUtc", startTime },
-            { "Status", "initiated" },
+            { "Status", AcceptedStatus },
             { "LastUpdatedUtc", startTime },
             { "TestParameters", JsonSerializer.Serialize(req) }
         };
@@ -65,7 +66,7 @@ public class TestRunner : ControllerBase
 
         return new AcceptedResult(string.Empty, new
             {
-                status = "ok",
+                status = AcceptedStatus,
                 startTime = startTime,
                 ts = DateTimeOffset.UtcNow, 
                 reqId = reqId

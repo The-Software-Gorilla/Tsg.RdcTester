@@ -12,6 +12,8 @@ public record TestRunRequest()
 
          [JsonPropertyName("numCalls")] public int NumCalls { get; init; }
          [JsonPropertyName("durationSeconds")] public int DurationSeconds { get; init; }
+         
+         [JsonPropertyName("multiItemPercentage")] public int MultiItemPercentage { get; init; } = 10; // percentage of calls that should use multi-item payloads
          [JsonPropertyName("maxConcurrency")] public int MaxConcurrency { get; init; } = 50;
          [JsonPropertyName("timeoutSeconds")] public int TimeoutSeconds { get; init; } = 100;
 
