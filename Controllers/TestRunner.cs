@@ -80,7 +80,7 @@ public class TestRunner : ControllerBase
     {
         try
         {
-            var status = await CheckStatusAsync(id);
+            var status = await new TestRunResult(_logger, _storageConnection).CheckStatusAsync(id);
             return new ContentResult
             {
                 Content = JsonSerializer.Serialize(status),
@@ -94,36 +94,25 @@ public class TestRunner : ControllerBase
         }
     }
 
-
-    private async Task<TestRunStatusResponse> CheckStatusAsync(Guid reqId)
+    [HttpGet]
+    [Route("results/{id:guid}")]
+    public async Task<IActionResult> Results([FromRoute] Guid id)
     {
-        var runTable = new TableClient(_storageConnection, "testRuns");
-        var entity = await runTable.GetEntityAsync<TableEntity>("testRun", reqId.ToString());
-
-        int totalCalls = entity.Value.GetInt32("TotalCalls") ?? 0;
-        int completedCalls = entity.Value.GetInt32("CompletedCalls") ?? 0;
-        string? status = entity.Value.GetString("Status") ?? "unknown";
-        DateTimeOffset? startedUtc = entity.Value.GetDateTime("StartedUtc");
-        DateTimeOffset? lastUpdatedUtc = entity.Value.GetDateTime("LastUpdatedUtc");
-        int duration = 0;
-
-        TimeSpan? durationTimeSpan = null;
-        if (startedUtc != null && lastUpdatedUtc != null)
+        try
         {
-            durationTimeSpan = lastUpdatedUtc - startedUtc;
-            duration = (int)durationTimeSpan.Value.TotalSeconds;
+            var results = await new TestRunResult(_logger, _storageConnection).CalculateResultsAsync(id);
+            return new ContentResult
+            {
+                Content = JsonSerializer.Serialize(results),
+                ContentType = "application/json",
+                StatusCode = 200
+            };
         }
-
-        return new TestRunStatusResponse
+        catch (RequestFailedException ex) when (ex.Status == 404)
         {
-            TotalCalls = totalCalls,
-            CompletedCalls = completedCalls,
-            Status = status,
-            StartedUtc = startedUtc,
-            LastUpdatedUtc = lastUpdatedUtc,
-            Duration = duration
-        };
-
+            return new NotFoundObjectResult(new { error = $"No test run found for ID {id}" });
+        }
     }
+    
 }
 
