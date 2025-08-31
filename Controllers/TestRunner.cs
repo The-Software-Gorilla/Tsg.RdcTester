@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Azure;
 using Azure.Data.Tables;
 using Microsoft.AspNetCore.Mvc;
 using Tsg.RdcTester.Model;
@@ -52,7 +53,7 @@ public class TestRunner : ControllerBase
         // the storage connection string, and it needs the configuration to get environment settings
         _ = Task.Run(async () =>
         {
-            var processor = new TestRunProcessor(_logger, _storageConnection, _configuration);
+            var processor = new TestRunProcessor(_logger, _storageConnection);
             try
             {
                 await processor.ProcessAsync(reqId);
@@ -77,13 +78,52 @@ public class TestRunner : ControllerBase
     [Route("/status/{id:guid}")]
     public async Task<IActionResult> Status([FromRoute] Guid id)
     {
-        return new OkObjectResult(new
+        try
         {
-            status = "ok",
-            ts = DateTimeOffset.UtcNow,
-            reqId = id,
-            progress = "not implemented"
-        });
+            var status = await CheckStatusAsync(id);
+            return new ContentResult
+            {
+                Content = JsonSerializer.Serialize(status),
+                ContentType = "application/json",
+                StatusCode = 200
+            };
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404)
+        {
+            return new NotFoundObjectResult(new { error = $"No test run found for ID {id}" });
+        }
+    }
+
+
+    private async Task<TestRunStatusResponse> CheckStatusAsync(Guid reqId)
+    {
+        var runTable = new TableClient(_storageConnection, "testRuns");
+        var entity = await runTable.GetEntityAsync<TableEntity>("testRun", reqId.ToString());
+
+        int totalCalls = entity.Value.GetInt32("TotalCalls") ?? 0;
+        int completedCalls = entity.Value.GetInt32("CompletedCalls") ?? 0;
+        string? status = entity.Value.GetString("Status") ?? "unknown";
+        DateTimeOffset? startedUtc = entity.Value.GetDateTime("StartedUtc");
+        DateTimeOffset? lastUpdatedUtc = entity.Value.GetDateTime("LastUpdatedUtc");
+        int duration = 0;
+
+        TimeSpan? durationTimeSpan = null;
+        if (startedUtc != null && lastUpdatedUtc != null)
+        {
+            durationTimeSpan = lastUpdatedUtc - startedUtc;
+            duration = (int)durationTimeSpan.Value.TotalSeconds;
+        }
+
+        return new TestRunStatusResponse
+        {
+            TotalCalls = totalCalls,
+            CompletedCalls = completedCalls,
+            Status = status,
+            StartedUtc = startedUtc,
+            LastUpdatedUtc = lastUpdatedUtc,
+            Duration = duration
+        };
+
     }
 }
 

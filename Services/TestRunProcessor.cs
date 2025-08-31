@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using System.Xml;
 using System.Xml.Serialization;
 using Azure;
@@ -13,23 +14,20 @@ public class TestRunProcessor
 {
     private readonly ILogger<TestRunner> _logger;
     private readonly string _storageConnection;
-    private readonly IConfiguration _configuration;
-    public TestRunProcessor(ILogger<TestRunner> logger, string storageConnection, IConfiguration cfg)
+    public TestRunProcessor(ILogger<TestRunner> logger, string storageConnection)
     {
         _logger = logger;
         _storageConnection = storageConnection;
-        _configuration = cfg;
     }
 
     public async Task ProcessAsync(Guid reqId)
     {
-        _logger.LogInformation("Processing request {reqId}", reqId);
         
         // grab the request details from Table storage using reqId
         var runTable = new TableClient(_storageConnection, "testRuns");
         var entity = await runTable.GetEntityAsync<TableEntity>("testRun", reqId.ToString());
         var testParamsJson = entity.Value.GetString("TestParameters");
-        var testParams = System.Text.Json.JsonSerializer.Deserialize<TestRunRequest>(testParamsJson ?? 
+        var testParams = JsonSerializer.Deserialize<TestRunRequest>(testParamsJson ?? 
             throw new InvalidOperationException("TestParameters is null"));
         if (testParams == null)
         {
@@ -42,8 +40,8 @@ public class TestRunProcessor
         
         // figure out how manny requests to send per second
         int rps = (int)Math.Floor((double)testParams.NumCalls / testParams.DurationSeconds);
-        _logger.LogInformation("{TS}: Processing {numCalls} calls over {duration} seconds ({rps} calls/sec)", 
-            DateTimeOffset.UtcNow.ToString(), testParams.NumCalls, testParams.DurationSeconds, rps);
+        _logger.LogInformation("{TS}: {ReqId} - Processing {numCalls} calls over {duration} seconds ({rps} calls/sec)", 
+            DateTimeOffset.UtcNow.ToString(), reqId, testParams.NumCalls, testParams.DurationSeconds, rps);
         
         entity.Value["Status"] = "started";
         entity.Value["TotalCalls"] = testParams.NumCalls;
@@ -54,9 +52,6 @@ public class TestRunProcessor
         // simulate sending requests at the calculated rate
         for (int call = 0; call < testParams.NumCalls; )
         {
-            int currentSecond = call / rps;
-            _logger.LogInformation("Starting second {second}", currentSecond + 1);
-            
             int callsThisSecond = Math.Min(rps, testParams.NumCalls - call);
             
             //What number of calls need to be multi-item calls in this second?
@@ -65,6 +60,7 @@ public class TestRunProcessor
             //How often should we send a multi-item call?
             int multiItemInterval = multiItemCalls > 0 ? callsThisSecond / Math.Max(multiItemCalls, 1) : 0;
             
+            var startCallTime = DateTimeOffset.UtcNow;
             for (int i = 0; i < callsThisSecond; i++, call++)
             {
                 //Determine if this call should be multi-item
@@ -75,7 +71,7 @@ public class TestRunProcessor
                 var envelope = SerializeEnvelope(CreateTestCallEnvelope(isMultiItem));
                 var callId = Guid.NewGuid();
                 
-                //TODO: Create the test call entity and save it to callTable
+                //Create the test call entity and save it to callTable
                 var testCallEntity = new TableEntity(reqId.ToString(), callId.ToString())
                 {
                     { "CallNumber", call + 1 },
@@ -86,29 +82,66 @@ public class TestRunProcessor
                 };
                 await callTable.AddEntityAsync(testCallEntity);
                 
-
-                //TODO: Submit the test call for processing via http request
-                
-                //TODO: Log the request submission
-
-                _logger.LogInformation("{TS}: {ReqId} - Sending request {call} of {numCalls}", 
+                _logger.LogInformation("{TS}: {ReqId} - Sending request {Call} of {NumCalls}", 
                     DateTimeOffset.UtcNow.ToString(), reqId.ToString(), call + 1, testParams.NumCalls);
+
+                //Submit the test call for processing via http request
+                var response = await CallEnsentaDoDepositAsync(testParams.TargetUrl, testParams.Headers, envelope);
+                
+                var responseContent = await response.Content.ReadAsStringAsync();
+
+                string transactionId = string.Empty;
+                if (response.IsSuccessStatusCode)
+                {
+                    using var doc = JsonDocument.Parse(responseContent);
+                    transactionId = doc.RootElement.GetProperty("transactionId").GetString();
+                }
+                
+                testCallEntity["ResponsePayload"] = responseContent;
+                testCallEntity["ResponseStatusCode"] = (int)response.StatusCode;
+                testCallEntity["Status"] = response.IsSuccessStatusCode ? "complete" : "error";
+                testCallEntity["LastUpdatedUtc"] = DateTimeOffset.UtcNow;
+                testCallEntity["TransactionId"] = transactionId;
+                await callTable.UpdateEntityAsync(testCallEntity, ETag.All);
+                
             }
             
             entity.Value["Status"] = "processing";
             entity.Value["CompletedCalls"] = call;
             entity.Value["LastUpdatedUtc"] = DateTimeOffset.UtcNow;
             await runTable.UpdateEntityAsync(entity.Value, ETag.All);
+            
 
-
-            await Task.Delay(1000);
+            if (call < testParams.NumCalls)
+            {
+                var elapsed = DateTimeOffset.UtcNow - startCallTime;
+                //If the elapsed time is less than 1 second, wait for the remainder of the second if needed
+                elapsed = TimeSpan.FromSeconds(1) - elapsed;
+                
+                if (elapsed > TimeSpan.FromMilliseconds(0))
+                {
+                    await Task.Delay(elapsed.Milliseconds);
+                }
+            }
         }
         
         entity.Value["Status"] = "complete";
         entity.Value["CompletedCalls"] = testParams.NumCalls;
         entity.Value["LastUpdatedUtc"] = DateTimeOffset.UtcNow;
         await runTable.UpdateEntityAsync(entity.Value, ETag.All);
-        _logger.LogInformation("{TS}: Completed processing request {reqId}", DateTimeOffset.UtcNow.ToString(), reqId);
+        _logger.LogInformation("{TS}: Completed processing request {ReqId}", DateTimeOffset.UtcNow.ToString(), reqId);
+    }
+    
+    private async Task<HttpResponseMessage> CallEnsentaDoDepositAsync(string url, Dictionary<string, string> headers, string soapMessage)
+    {
+        using var httpClient = new HttpClient();
+        var request = new HttpRequestMessage(HttpMethod.Post, url);
+        foreach (var header in headers)
+        {
+            request.Headers.Add(header.Key, header.Value);
+        }
+        request.Content = new StringContent(soapMessage, Encoding.UTF8, "application/xml");
+        return await httpClient.SendAsync(request);
     }
     
     private static string SerializeEnvelope(EnsentaSoapEnvelope envelope)
