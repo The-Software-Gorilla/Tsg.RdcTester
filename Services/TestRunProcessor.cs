@@ -39,9 +39,8 @@ public class TestRunProcessor
         await callTable.CreateIfNotExistsAsync();
         
         // figure out how manny requests to send per second
-        int rps = (int)Math.Floor((double)testParams.NumCalls / testParams.DurationSeconds);
-        _logger.LogInformation("{TS}: {ReqId} - Processing {numCalls} calls over {duration} seconds ({rps} calls/sec)", 
-            DateTimeOffset.UtcNow.ToString(), reqId, testParams.NumCalls, testParams.DurationSeconds, rps);
+        _logger.LogInformation("{TS}: {ReqId} - Processing {numCalls} calls over {duration} seconds", 
+            DateTimeOffset.UtcNow.ToString(), reqId, testParams.NumCalls, testParams.DurationSeconds);
         
         entity.Value["Status"] = "started";
         entity.Value["TotalCalls"] = testParams.NumCalls;
@@ -49,62 +48,57 @@ public class TestRunProcessor
         entity.Value["LastUpdatedUtc"] = DateTimeOffset.UtcNow;
         await runTable.UpdateEntityAsync(entity.Value, entity.Value.ETag);
         
+        // Calculate the interval between calls
+        double intervalSeconds = (double)testParams.DurationSeconds / testParams.NumCalls;
+        var nextCallTime = DateTimeOffset.UtcNow;
+        
+        int multiItemCalls = testParams.NumCalls * (testParams.MultiItemPercentage/100);
+        int multiItemInterval = multiItemCalls > 0 ? testParams.NumCalls / Math.Max(multiItemCalls, 1) : 0;
+        
         // simulate sending requests at the calculated rate
-        for (int call = 0; call < testParams.NumCalls; )
+        for (int call = 0; call < testParams.NumCalls; call++ )
         {
-            int callsThisSecond = Math.Min(rps, testParams.NumCalls - call);
-            
-            //What number of calls need to be multi-item calls in this second?
-            int multiItemCalls = (int)Math.Ceiling(callsThisSecond * (testParams.MultiItemPercentage / 100.0));
-            
-            //How often should we send a multi-item call?
-            int multiItemInterval = multiItemCalls > 0 ? callsThisSecond / Math.Max(multiItemCalls, 1) : 0;
-            
             var startCallTime = DateTimeOffset.UtcNow;
-            for (int i = 0; i < callsThisSecond; i++, call++)
+            //Determine if this call should be multi-item
+            bool isMultiItem = (multiItemInterval > 0) && (call % multiItemInterval == 0) && (multiItemCalls > 0);
+            if (isMultiItem) multiItemCalls--;
+            
+            //Create an Ensenta SOAP message to send
+            var envelope = SerializeEnvelope(CreateTestCallEnvelope(isMultiItem));
+            var callId = Guid.NewGuid();
+            
+            //Create the test call entity and save it to callTable
+            var testCallEntity = new TableEntity(reqId.ToString(), callId.ToString())
             {
-                //Determine if this call should be multi-item
-                bool isMultiItem = (multiItemInterval > 0) && (i % multiItemInterval == 0) && (multiItemCalls > 0);
-                if (isMultiItem) multiItemCalls--;
-                
-                //Create an Ensenta SOAP message to send
-                var envelope = SerializeEnvelope(CreateTestCallEnvelope(isMultiItem));
-                var callId = Guid.NewGuid();
-                
-                //Create the test call entity and save it to callTable
-                var testCallEntity = new TableEntity(reqId.ToString(), callId.ToString())
-                {
-                    { "CallNumber", call + 1 },
-                    { "IsMultiItem", isMultiItem },
-                    { "RequestPayload", envelope },
-                    { "Status", "created" },
-                    { "CreatedUtc", DateTimeOffset.UtcNow }
-                };
-                await callTable.AddEntityAsync(testCallEntity);
-                
-                _logger.LogInformation("{TS}: {ReqId} - Sending request {Call} of {NumCalls}", 
-                    DateTimeOffset.UtcNow.ToString(), reqId.ToString(), call + 1, testParams.NumCalls);
+                { "CallNumber", call + 1 },
+                { "IsMultiItem", isMultiItem },
+                { "RequestPayload", envelope },
+                { "Status", "created" },
+                { "CreatedUtc", DateTimeOffset.UtcNow }
+            };
+            await callTable.AddEntityAsync(testCallEntity);
+            
+            _logger.LogInformation("{TS}: {ReqId} - Sending request {Call} of {NumCalls}", 
+                DateTimeOffset.UtcNow.ToString(), reqId.ToString(), call + 1, testParams.NumCalls);
 
-                //Submit the test call for processing via http request
-                var response = await CallEnsentaDoDepositAsync(testParams.TargetUrl, testParams.Headers, envelope);
-                
-                var responseContent = await response.Content.ReadAsStringAsync();
+            //Submit the test call for processing via http request
+            var response = await CallEnsentaDoDepositAsync(testParams.TargetUrl, testParams.Headers, envelope);
+            
+            var responseContent = await response.Content.ReadAsStringAsync();
 
-                string transactionId = string.Empty;
-                if (response.IsSuccessStatusCode)
-                {
-                    using var doc = JsonDocument.Parse(responseContent);
-                    transactionId = doc.RootElement.GetProperty("transactionId").GetString();
-                }
-                
-                testCallEntity["ResponsePayload"] = responseContent;
-                testCallEntity["ResponseStatusCode"] = (int)response.StatusCode;
-                testCallEntity["Status"] = response.IsSuccessStatusCode ? "complete" : "error";
-                testCallEntity["LastUpdatedUtc"] = DateTimeOffset.UtcNow;
-                testCallEntity["TransactionId"] = transactionId;
-                await callTable.UpdateEntityAsync(testCallEntity, ETag.All);
-                
+            string transactionId = string.Empty;
+            if (response.IsSuccessStatusCode)
+            {
+                using var doc = JsonDocument.Parse(responseContent);
+                transactionId = doc.RootElement.GetProperty("transactionId").GetString();
             }
+            
+            testCallEntity["ResponsePayload"] = responseContent;
+            testCallEntity["ResponseStatusCode"] = (int)response.StatusCode;
+            testCallEntity["Status"] = response.IsSuccessStatusCode ? "complete" : "error";
+            testCallEntity["LastUpdatedUtc"] = DateTimeOffset.UtcNow;
+            testCallEntity["TransactionId"] = transactionId;
+            await callTable.UpdateEntityAsync(testCallEntity, ETag.All);
             
             entity.Value["Status"] = "processing";
             entity.Value["CompletedCalls"] = call;
@@ -114,13 +108,11 @@ public class TestRunProcessor
 
             if (call < testParams.NumCalls)
             {
-                var elapsed = DateTimeOffset.UtcNow - startCallTime;
-                //If the elapsed time is less than 1 second, wait for the remainder of the second if needed
-                elapsed = TimeSpan.FromSeconds(1) - elapsed;
-                
-                if (elapsed > TimeSpan.FromMilliseconds(0))
+                nextCallTime = nextCallTime.AddSeconds(intervalSeconds);
+                var delay = nextCallTime - DateTimeOffset.UtcNow;
+                if (delay > TimeSpan.Zero)
                 {
-                    await Task.Delay(elapsed.Milliseconds);
+                    await Task.Delay(delay);
                 }
             }
         }
