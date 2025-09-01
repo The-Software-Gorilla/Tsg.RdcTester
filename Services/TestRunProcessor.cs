@@ -52,7 +52,7 @@ public class TestRunProcessor
         double intervalSeconds = (double)testParams.DurationSeconds / testParams.NumCalls;
         var nextCallTime = DateTimeOffset.UtcNow;
         
-        int multiItemCalls = testParams.NumCalls * (testParams.MultiItemPercentage/100);
+        int multiItemCalls = (int)(testParams.NumCalls * ((double)testParams.MultiItemPercentage/100));
         int multiItemInterval = multiItemCalls > 0 ? testParams.NumCalls / Math.Max(multiItemCalls, 1) : 0;
         
         // simulate sending requests at the calculated rate
