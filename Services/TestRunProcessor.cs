@@ -136,9 +136,9 @@ public class TestRunProcessor
         return await httpClient.SendAsync(request);
     }
     
-    private static string SerializeEnvelope(EnsentaSoapEnvelope envelope)
+    private static string SerializeEnvelope(EnsentaRequestSoapEnvelope envelope)
     {
-        var serializer = new XmlSerializer(typeof(EnsentaSoapEnvelope));
+        var serializer = new XmlSerializer(typeof(EnsentaRequestSoapEnvelope));
         var settings = new XmlWriterSettings
         {
             Encoding = Encoding.UTF8,
@@ -152,11 +152,11 @@ public class TestRunProcessor
         }
         return Encoding.UTF8.GetString(ms.ToArray());
     }
-    private static EnsentaSoapEnvelope CreateTestCallEnvelope(bool multiDepositItem = false)
+    private static EnsentaRequestSoapEnvelope CreateTestCallEnvelope(bool multiDepositItem = false)
     {
-        var envelope = new EnsentaSoapEnvelope
+        var envelope = new EnsentaRequestSoapEnvelope
         {
-            Body = new EnsentaSoapBody
+            Body = new EnsentaRequestSoapBody
             {
                 DoDepositTransaction = new DoDepositTransaction
                 {

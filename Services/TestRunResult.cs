@@ -133,6 +133,11 @@ public class TestRunResult
             {
                 result.FailedDeposits++;
             }
+            
+            //TODO: We need to check that the deposit transaction values are correct. We should also do some anomaly
+            // detection on timings. We need some parameters in the initial call that will define what anomalies to
+            // look for. For example, if the average time is 2 seconds, and one call took 20 seconds, that is probably
+            // an anomaly. We need to figure out the anomaly detection parameters.
         }
         
         result.AvgDoDepositRequestInvokeTimeMs = callCount > 0 ? totalInvokeTimeMs / callCount : 0;

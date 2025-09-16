@@ -15,6 +15,7 @@ public record TestRunRequest()
          [JsonPropertyName("maxConcurrency")] public int MaxConcurrency { get; init; } = 50;
          [JsonPropertyName("timeoutSeconds")] public int TimeoutSeconds { get; init; } = 100;
          
+         
          public (bool IsValid, string? Error) Validate()
          {
              if (string.IsNullOrWhiteSpace(TargetUrl)) return (false, "targetBaseUrl is required");

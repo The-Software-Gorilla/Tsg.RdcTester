@@ -32,7 +32,7 @@ public record TestRunResultResponse()
     [JsonPropertyName("failedDeposits")] public int FailedDeposits { get; set; }
     [JsonPropertyName("successfulCalls")] public int SuccessfulSymxCalls { get; set; }
     [JsonPropertyName("failedCalls")] public int FailedSymxCalls { get; set; }
-    [JsonPropertyName("depositItemDiscrepancyCount")] public int DepositItemDiscrepancyCount { get; set; }
-    [JsonPropertyName("depositItemDiscrepancies")] public List<TestItemDiscrepancy>? DepositItemDiscrepancies { get; set; }
+    [JsonPropertyName("depositItemAnomalyCount")] public int DepositItemAnomalyCount { get; set; }
+    [JsonPropertyName("depositItemAnomalies")] public List<TestItemAnomaly>? DepositItemAnomalies { get; set; }
     
 }
