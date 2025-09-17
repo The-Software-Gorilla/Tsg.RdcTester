@@ -167,14 +167,15 @@ public class TestRunProcessor
     }
     private static EnsentaRequestSoapEnvelope CreateTestCallEnvelope(bool multiDepositItem = false)
     {
+        TestAccount testAccount = TestAccount.GetTestAccounts()[Random.Shared.Next(0, TestAccount.GetTestAccounts().Count - 1)];
         var envelope = new EnsentaRequestSoapEnvelope
         {
             Body = new EnsentaRequestSoapBody
             {
                 DoDepositTransaction = new DoDepositTransaction
                 {
-                    AccountHolderNumber = Random.Shared.Next(100000000, 999999999).ToString("D9"),
-                    AcctSuffix = "S" + Random.Shared.Next(0, 9999).ToString("D4"),
+                    AccountHolderNumber = testAccount.AccountNumber,
+                    AcctSuffix = testAccount.AccountSuffix,
                     ReceiptTransactionNumber = Random.Shared.Next(100000000, 999999999).ToString("D9"),
                     StationDateTime = DateTimeOffset.UtcNow.ToString(),
                     IsReversalFlag = "N",
