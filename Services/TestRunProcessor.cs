@@ -87,10 +87,23 @@ public class TestRunProcessor
             var responseContent = await response.Content.ReadAsStringAsync();
 
             string transactionId = string.Empty;
+            
+            // parse the response as an EnsertaResponseSoapEnvelope to get the transactionId if successful.
+            // The responseContent should be a valid SOAP response.
             if (response.IsSuccessStatusCode)
             {
-                using var doc = JsonDocument.Parse(responseContent);
-                transactionId = doc.RootElement.GetProperty("transactionId").GetString();
+                try
+                {
+                    var serializer = new XmlSerializer(typeof(EnsentaResponseSoapEnvelope));
+                    using var stringReader = new StringReader(responseContent);
+                    var responseEnvelope = (EnsentaResponseSoapEnvelope)serializer.Deserialize(stringReader);
+                    transactionId = responseEnvelope?.Body?.DoDepositTransactionResponse?.DoDepositTransactionResult?.TransactionId.ToString();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "{TS}: {ReqId} - Error deserializing response for call {Call}", 
+                        DateTimeOffset.UtcNow.ToString(), reqId.ToString(), call + 1);
+                }
             }
             
             testCallEntity["ResponsePayload"] = responseContent;
