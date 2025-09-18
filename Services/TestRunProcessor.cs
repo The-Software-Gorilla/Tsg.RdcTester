@@ -177,7 +177,7 @@ public class TestRunProcessor
                     AccountHolderNumber = testAccount.AccountNumber,
                     AcctSuffix = testAccount.AccountSuffix,
                     ReceiptTransactionNumber = Random.Shared.Next(100000000, 999999999).ToString("D9"),
-                    StationDateTime = DateTimeOffset.UtcNow.ToString(),
+                    StationDateTime = DateTime.UtcNow,
                     IsReversalFlag = "N",
                     TransactionType = "Deposit",
                     FeeAmount = "0",
