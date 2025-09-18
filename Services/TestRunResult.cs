@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Azure;
 using Azure.Data.Tables;
+using Tsg.Models.Ensenta;
+using Tsg.Models.SymX;
 using Tsg.RdcTester.Controllers;
 using Tsg.RdcTester.Model;
 
@@ -16,8 +18,9 @@ public class TestRunResult
         _storageConnection = storageConnection;
     }
     
-    public async Task<TestRunResultResponse> CalculateResultsAsync(Guid reqId)
+    public async Task<TestRunResultResponse> CalculateResultsAsync(TestRunResultRequest request)
     {
+        Guid reqId = Guid.Parse(request.TestRunId);
         var result = new TestRunResultResponse();
         result.TestRunStatus = await CheckStatusAsync(reqId);
         
@@ -39,10 +42,9 @@ public class TestRunResult
         
         int callCount = 0;
         
-        List<string> errors = new List<string>();
-        
         await foreach (var call in queryResults)
         {
+            List<string> errors = new List<string>();
             string? status = call.GetString("Status");
             int respStatus = call.GetInt32("ResponseStatusCode") ?? 0;
             bool isSuccess = respStatus >= 200 && respStatus < 300;
@@ -50,11 +52,14 @@ public class TestRunResult
             DateTimeOffset? invokeCompleteUtc = call.GetDateTime("LastUpdatedUtc");
             bool isMultiItem = call.GetBoolean("IsMultiItem") ?? false;
             string? transactionId = call.GetString("TransactionId");
+            string? symxId = null;
             callCount++;
             if (invokeCompleteUtc != null && createdUtc != null)
             {
                 DepositTransactionDetails details = null;
                 SymxCallDetails symx = null;
+                DoDepositTransaction? depositReq = null;
+                UserDefinedParameters? userParams = null;
                 if (transactionId != null)
                 {
                     details = await FetchDepositTransactionDetailsAsync(depositTable, transactionId);
@@ -66,7 +71,10 @@ public class TestRunResult
                             var respJson = JsonDocument.Parse(details.CallResponse);
                             if (respJson.RootElement.TryGetProperty("symxCallId", out var Id))
                             {
+                                symxId = Id.GetString();
                                 symx = await FetchSymxCallDetailsAsync(syntheticSymxTable, Id.GetString());
+                                userParams = parseSymxUserParams(symx.Xml);
+                                depositReq = parseDepositRequestXml(details.Xml);
                             }
                         }
                         catch (JsonException)
@@ -78,12 +86,24 @@ public class TestRunResult
                 }
                 
                 int invokeTime = (int)(invokeCompleteUtc - createdUtc).Value.TotalMilliseconds;
+                if (invokeTime > request.MaxInvokeTimeMs)
+                {
+                    errors.Add($"Max Invoke Time ({request.MaxInvokeTimeMs}) Ms exceeded ({invokeTime} Ms)");
+                }
                 int totalTime = details != null && details.CallCompleteUtc != null
                     ? (int)(details.CallCompleteUtc - createdUtc).Value.TotalMilliseconds
                     : 0;
+                if (totalTime > request.MaxDepositTimeMs)
+                {
+                    errors.Add($"Max Deposit Time ({request.MaxDepositTimeMs}) Ms exceeded ({totalTime} Ms)");
+                }
                 int symxTime = symx != null && symx.StartedUtc != null && symx.LastUpdatedUtc != null
                     ? (int)(symx.LastUpdatedUtc - symx.StartedUtc).Value.TotalMilliseconds
                     : 0;
+                if (symxTime > request.MaxSymxCallTimeMs)
+                {
+                    errors.Add($"Max SymX Call Time ({request.MaxSymxCallTimeMs}) Ms exceeded ({symxTime} Ms)");
+                }
                 if (symx !=null && symx.Xml != null)
                 {
                     result.SuccessfulSymxCalls++;
@@ -122,6 +142,51 @@ public class TestRunResult
                     totalSingleItemInvokeTimeMs += invokeTime;
                     totalSingleItemDepositTimeMs += totalTime;
                 }
+                
+                if (depositReq != null && userParams != null)
+                {
+                    foreach (var charPar in userParams.RgUserChr)
+                    {
+                        switch (charPar.Id)
+                        {
+                            case 1:
+                                if (depositReq.AccountHolderNumber != charPar.Value)
+                                {
+                                    errors.Add($"AccountNumber mismatch: SymX '{charPar.Value}' vs Deposit '{depositReq.AccountHolderNumber}'");
+                                }
+                                break;
+                            case 2:
+                                if (depositReq.AcctSuffix.ToUpper().Replace("S","") != charPar.Value)
+                                {
+                                    errors.Add($"AccountSuffix mismatch: SymX '{charPar.Value}' vs Deposit '{depositReq.AcctSuffix}'");
+                                }
+                                break;
+                            case 3:
+                                if (depositReq.ReceiptTransactionNumber != charPar.Value)
+                                {
+                                    errors.Add($"ReceiptTransactionNumber mismatch: SymX '{charPar.Value}' vs Deposit '{depositReq.ReceiptTransactionNumber}'");
+                                }
+                                break;
+                        }
+                    }
+                    foreach (var numPar in userParams.RgUserNum)
+                    {
+                        if (numPar.Id == 1)
+                        {
+                            if (decimal.TryParse(depositReq.DepositItems.Sum(di => decimal.Parse(di.Amount)).ToString("F2"), out var totalAmount))
+                            {
+                                if (totalAmount != numPar.Value / 100.0m)
+                                {
+                                    errors.Add($"Total Amount mismatch: SymX '{numPar.Value / 100.0m:F2}' vs Deposit '{totalAmount:F2}'");
+                                }
+                            }
+                            else
+                            {
+                                errors.Add($"Failed to parse Deposit total amount for transaction {transactionId}");
+                            }
+                        }
+                    }
+                }
 
             }
             
@@ -131,13 +196,29 @@ public class TestRunResult
             }
             else
             {
+                errors.Add($"Failed to complete deposits for transaction {transactionId}");
                 result.FailedDeposits++;
             }
             
-            //TODO: We need to check that the deposit transaction values are correct. We should also do some anomaly
-            // detection on timings. We need some parameters in the initial call that will define what anomalies to
-            // look for. For example, if the average time is 2 seconds, and one call took 20 seconds, that is probably
-            // an anomaly. We need to figure out the anomaly detection parameters.
+            if (errors.Count > 0)
+            {
+                if (result.DepositItemAnomalies == null)
+                {
+                    result.DepositItemAnomalies = new List<TestItemAnomaly>();
+                }
+                result.DepositItemAnomalies.Add(new TestItemAnomaly()
+                {
+                    CallId = call.RowKey,
+                    CallNumber = call.GetInt32("CallNumber") ?? 0,
+                    DepositTransactionId = transactionId,
+                    ErrorList = errors,
+                    IsMultiItem = isMultiItem,
+                    RequestId = reqId.ToString(),
+                    SymxOutboundId = symxId
+                        
+                });
+            }
+            
         }
         
         result.AvgDoDepositRequestInvokeTimeMs = callCount > 0 ? totalInvokeTimeMs / callCount : 0;
@@ -181,6 +262,40 @@ public class TestRunResult
             Duration = duration
         };
 
+    }
+
+    private UserDefinedParameters? parseSymxUserParams(string? xml)
+    {
+        if (string.IsNullOrEmpty(xml)) return null;
+        try
+        {
+            var serializer = new System.Xml.Serialization.XmlSerializer(typeof(SymXSoapEnvelope));
+            using var reader = new StringReader(xml);
+            SymXSoapEnvelope? envelope = (SymXSoapEnvelope)serializer.Deserialize(reader);
+            return envelope.Body.ExecutePowerOnReturnArray.Request.Body.UserDefinedParameters;
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogWarning(ex, "Failed to parse SymX SOAP XML");
+            return null;
+        }
+    }
+    
+    private DoDepositTransaction? parseDepositRequestXml(string? xml)
+    {
+        if (xml == null) return null;
+        try
+        {
+            var serializer = new System.Xml.Serialization.XmlSerializer(typeof(EnsentaRequestSoapEnvelope));
+            using var reader = new StringReader(xml);
+            EnsentaRequestSoapEnvelope? envelope = (EnsentaRequestSoapEnvelope)serializer.Deserialize(reader);
+            return envelope.Body.DoDepositTransaction;
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogWarning(ex, "Failed to parse DoDepositTransaction XML");
+            return null;
+        }
     }
     
     private async Task<DepositTransactionDetails> FetchDepositTransactionDetailsAsync(TableClient depositTable, string reqId)

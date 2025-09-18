@@ -98,9 +98,16 @@ public class TestRunner : ControllerBase
     [Route("results/{id:guid}")]
     public async Task<IActionResult> Results([FromRoute] Guid id)
     {
+        return await ResultsPost(new TestRunResultRequest(id));
+    }
+    
+    [HttpPost]
+    [Route("results")]
+    public async Task<IActionResult> ResultsPost([FromBody] TestRunResultRequest req)
+    {
         try
         {
-            var results = await new TestRunResult(_logger, _storageConnection).CalculateResultsAsync(id);
+            var results = await new TestRunResult(_logger, _storageConnection).CalculateResultsAsync(req);
             return new ContentResult
             {
                 Content = JsonSerializer.Serialize(results),
@@ -110,7 +117,7 @@ public class TestRunner : ControllerBase
         }
         catch (RequestFailedException ex) when (ex.Status == 404)
         {
-            return new NotFoundObjectResult(new { error = $"No test run found for ID {id}" });
+            return new NotFoundObjectResult(new { error = $"No test run found for ID {req.TestRunId}" });
         }
     }
     

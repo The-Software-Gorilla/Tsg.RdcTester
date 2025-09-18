@@ -10,7 +10,5 @@ public record TestItemAnomaly()
     [JsonPropertyName("depositTransactionId")] public string? DepositTransactionId {get; set;}
     [JsonPropertyName("symxOutboundId")] public string? SymxOutboundId {get; set;}
     [JsonPropertyName("isMultiItem")] public bool IsMultiItem {get; set;}
-    [JsonPropertyName("expectedValue")] public decimal ExpectedValue {get; set;}
-    [JsonPropertyName("actualValue")] public decimal ActualValue {get; set;}
-    [JsonPropertyName("anomalyType")] public string? AnomalyType {get; set;} // e.g., "Missing", "Mismatch"
+    [JsonPropertyName("errorList")] public List<String> ErrorList {get; set;}
 }
