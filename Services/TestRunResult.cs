@@ -220,7 +220,10 @@ public class TestRunResult
             }
             
         }
-        
+        if (result.DepositItemAnomalies != null && result.DepositItemAnomalies.Count > 0)
+        {
+            result.DepositItemAnomalyCount = result.DepositItemAnomalies.Count;
+        }
         result.AvgDoDepositRequestInvokeTimeMs = callCount > 0 ? totalInvokeTimeMs / callCount : 0;
         result.AvgMultiItemInvokeTimeMs = result.MultiItemCount > 0 ? totalMultiItemInvokeTimeMs / result.MultiItemCount : 0;
         result.AvgSingleItemInvokeTimeMs = result.SingleItemCount > 0 ? totalSingleItemInvokeTimeMs / result.SingleItemCount : 0;
